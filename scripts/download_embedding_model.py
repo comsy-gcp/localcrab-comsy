@@ -1,15 +1,17 @@
 """
-Download a supported multilingual embedding model for OPENCRAB_EMBEDDING_MODEL.
+Download a supported local model: an embedding model for OPENCRAB_EMBEDDING_MODEL
+or a reranker for OPENCRAB_RERANKER_MODEL.
 
 Fetches the pinned ONNX export and tokenizer from the model's Hugging Face
-repository into OPENCRAB_EMBEDDING_MODEL_DIR (default
-~/.cache/opencrab/models/<model>). Only the files listed for the model in
-opencrab.stores.onnx_embedding.MODELS are fetched, from the pinned commit,
-and each one must match its recorded sha256. This is the only step that
-touches the network; embedding itself runs locally.
+repository into the model's directory (OPENCRAB_EMBEDDING_MODEL_DIR or
+OPENCRAB_RERANKER_MODEL_DIR; default ~/.cache/opencrab/models/<model>). Only
+the files listed for the model in opencrab.stores.onnx_embedding.DOWNLOADS are
+fetched, from the pinned commit, and each one must match its recorded sha256.
+This is the only step that touches the network; the models run locally.
 
 Usage (from the repository root):
     python scripts/download_embedding_model.py multilingual-e5-small
+    python scripts/download_embedding_model.py bge-reranker-v2-m3
     python scripts/download_embedding_model.py bge-m3 --dest /models/bge-m3
 """
 
@@ -30,9 +32,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import opencrab.ontology.cross_encoder  # noqa: E402,F401  (registers the reranker models)
 from opencrab.stores.onnx_embedding import (  # noqa: E402
+    DOWNLOADS,
     MANIFEST_FILE,
-    MODELS,
     check_model_dir,
     resolve_model_dir,
 )
@@ -44,8 +47,10 @@ _CHUNK = 1 << 20
 
 
 def file_url(model: str, name: str) -> str:
-    spec = MODELS[model]
-    return f"{_HF}/{spec.repo}/resolve/{spec.revision}/onnx/{name}"
+    """URL of the pinned repository file stored locally as ``name``."""
+    spec = DOWNLOADS[model]
+    remote = next(remote for remote, local, _ in spec.files if local == name)
+    return f"{_HF}/{spec.repo}/resolve/{spec.revision}/{remote}"
 
 
 def fetch(url: str, target: Path, sha256: str) -> None:
@@ -79,7 +84,7 @@ def sha256_of(path: Path) -> str:
 
 def write_manifest(model: str, dest: Path) -> None:
     """Write the manifest through a temporary file so an existing link is replaced, not followed."""
-    spec = MODELS[model]
+    spec = DOWNLOADS[model]
     payload = json.dumps({"model": model, "repo": spec.repo, "revision": spec.revision}, indent=2)
     fd, tmp_name = tempfile.mkstemp(dir=dest, prefix=f".{MANIFEST_FILE}.", suffix=".tmp")
     try:
@@ -117,7 +122,7 @@ def ensure_files(model: str, dest: Path) -> int:
     dest.mkdir(parents=True, exist_ok=True)
     (dest / MANIFEST_FILE).unlink(missing_ok=True)
     fetched = 0
-    for name, sha256 in MODELS[model].files:
+    for _, name, sha256 in DOWNLOADS[model].files:
         target = dest / name
         if target.is_file() and sha256_of(target) == sha256:
             continue
@@ -130,7 +135,7 @@ def ensure_files(model: str, dest: Path) -> int:
 
 def check_and_fetch(model: str, dest: Path) -> int:
     """Refuse a directory owned by another model, then verify or fetch every file."""
-    spec = MODELS[model]
+    spec = DOWNLOADS[model]
     manifest = dest / MANIFEST_FILE
     if manifest.is_file():
         try:
@@ -147,7 +152,7 @@ def check_and_fetch(model: str, dest: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("model", choices=sorted(MODELS))
+    parser.add_argument("model", choices=sorted(DOWNLOADS))
     parser.add_argument("--dest", type=Path, default=None, help="target directory")
     args = parser.parse_args(argv)
     dest = (args.dest or resolve_model_dir(args.model)).expanduser()
