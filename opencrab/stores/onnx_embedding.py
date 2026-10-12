@@ -31,6 +31,16 @@ MANIFEST_FILE = "opencrab-model.json"
 
 
 @dataclass(frozen=True)
+class DownloadSpec:
+    """Pinned files of one downloadable model (embedding or reranker)."""
+
+    repo: str
+    revision: str  # pinned commit of the Hugging Face repository
+    files: tuple[tuple[str, str, str], ...]  # (path in the repository, local file name, sha256)
+    dir_env: str  # environment variable that overrides the local directory
+
+
+@dataclass(frozen=True)
 class ModelSpec:
     """How to fetch and run one supported model."""
 
@@ -94,6 +104,24 @@ MODELS: dict[str, ModelSpec] = {
 }
 
 
+DOWNLOADS: dict[str, DownloadSpec] = {
+    name: DownloadSpec(
+        repo=spec.repo,
+        revision=spec.revision,
+        files=tuple((f"onnx/{file}", file, sha) for file, sha in spec.files),
+        dir_env="OPENCRAB_EMBEDDING_MODEL_DIR",
+    )
+    for name, spec in MODELS.items()
+}
+
+
+def register_download(name: str, spec: DownloadSpec) -> None:
+    """Make another model (e.g. a reranker) fetchable and checkable like the embedding models."""
+    if DOWNLOADS.get(name, spec) != spec:
+        raise ValueError(f"A different download is already registered as {name!r}")
+    DOWNLOADS[name] = spec
+
+
 def embedding_model_from_env() -> str | None:
     """Return the model named by ``OPENCRAB_EMBEDDING_MODEL``, or None for Chroma's default."""
     raw = os.getenv("OPENCRAB_EMBEDDING_MODEL", "").strip()
@@ -105,15 +133,16 @@ def embedding_model_from_env() -> str | None:
 
 
 def resolve_model_dir(model: str) -> Path:
-    """Directory holding the model files: ``OPENCRAB_EMBEDDING_MODEL_DIR`` or ~/.cache/opencrab/models/<model>."""
-    override = os.getenv("OPENCRAB_EMBEDDING_MODEL_DIR", "").strip()
+    """Directory holding the model files: the model's directory variable or ~/.cache/opencrab/models/<model>."""
+    env = DOWNLOADS[model].dir_env if model in DOWNLOADS else "OPENCRAB_EMBEDDING_MODEL_DIR"
+    override = os.getenv(env, "").strip()
     if override:
         return Path(override).expanduser()
     return Path.home() / ".cache" / "opencrab" / "models" / model
 
 
 def model_files_present(model: str, model_dir: Path) -> bool:
-    return all((model_dir / name).is_file() for name, _ in MODELS[model].files)
+    return all((model_dir / local).is_file() for _, local, _ in DOWNLOADS[model].files)
 
 
 def check_model_dir(model: str, model_dir: Path) -> None:
@@ -124,7 +153,7 @@ def check_model_dir(model: str, model_dir: Path) -> None:
     """
     hint = f"Run: python scripts/download_embedding_model.py {model}"
     if not model_files_present(model, model_dir):
-        raise FileNotFoundError(f"Embedding model files for {model} not found in {model_dir}. {hint}")
+        raise FileNotFoundError(f"Model files for {model} not found in {model_dir}. {hint}")
     manifest = model_dir / MANIFEST_FILE
     if not manifest.is_file():
         raise FileNotFoundError(f"{model_dir} has no {MANIFEST_FILE}; the files are unverified. {hint}")
@@ -135,7 +164,7 @@ def check_model_dir(model: str, model_dir: Path) -> None:
     if not isinstance(recorded, dict) or recorded.get("model") != model:
         found = recorded.get("model") if isinstance(recorded, dict) else None
         raise ValueError(f"{model_dir} holds {found!r}, not {model!r}. {hint} into another directory")
-    if recorded.get("revision") != MODELS[model].revision:
+    if recorded.get("revision") != DOWNLOADS[model].revision:
         raise ValueError(f"{model_dir} holds another revision of {model}. {hint}")
 
 

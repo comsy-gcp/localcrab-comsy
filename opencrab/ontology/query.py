@@ -157,6 +157,16 @@ def _profile_for_query(question: str, limit: int, graph_depth: int) -> _QueryPro
     )
 
 
+def _cross_encoder_from_env() -> Any:
+    """The shared cross-encoder named by OPENCRAB_RERANKER_MODEL, or None (module not imported)."""
+    if not os.getenv("OPENCRAB_RERANKER_MODEL", "").strip():
+        return None
+    from opencrab.ontology import cross_encoder
+
+    model = cross_encoder.reranker_from_env()
+    return cross_encoder.get_cross_encoder(model) if model else None
+
+
 def _ordered_unique(values: list[str | None], limit: int) -> list[str]:
     seen: set[str] = set()
     output: list[str] = []
@@ -236,6 +246,8 @@ class HybridQuery:
         self._bm25_cache_size: int = 0
         self._bm25_dirty: bool = True
         self._chunk_bm25 = ChunkBM25(chroma)
+        # Local cross-encoder (OPENCRAB_RERANKER_MODEL); loaded here so missing files fail at startup.
+        self._cross_encoder = _cross_encoder_from_env()
 
     def invalidate_bm25_cache(self) -> None:
         """Mark the BM25 index stale so it is rebuilt on the next query."""
@@ -325,6 +337,14 @@ class HybridQuery:
         # --- Stage 5: Policy-aware filter ---
         if subject_id and self._rebac is not None:
             merged = self._policy_filter(merged, subject_id)
+
+        # --- Stage 6: Cross-encoder rerank of the top results (opt-in) ---
+        if use_rerank and self._cross_encoder is not None and merged:
+            from opencrab.ontology import cross_encoder
+
+            # At least `limit` results, so every returned result carries the same kind of score.
+            top_k = max(cross_encoder.rerank_top_k(), limit)
+            merged = cross_encoder.rerank_results(question, merged, top_k, self._cross_encoder)
 
         # Convert back to QueryResult
         results = []
