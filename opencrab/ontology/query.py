@@ -571,7 +571,12 @@ class HybridQuery:
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
         title = chunking.document_title(source_id, metadata)
-        chunks = chunking.chunk_markdown(text, title, max_chars=chunking.chunk_max_chars())
+        chunks = chunking.chunk_markdown(
+            text,
+            title,
+            max_chars=chunking.chunk_max_chars(),
+            table_rows=chunking.table_rows_enabled(),
+        )
         result: dict[str, Any] = {"source_id": source_id, "stores": {}, "chunks": len(chunks)}
 
         if not self._chroma.available:

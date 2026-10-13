@@ -18,6 +18,7 @@ OPENCRAB_CHUNKING=1 opencrab serve
 | `OPENCRAB_CHUNKING` | off | `1`/`true`/`yes`/`on` enables chunking |
 | `OPENCRAB_CHUNK_MAX_CHARS` | `1200` | Maximum body characters per chunk (header excluded) |
 | `OPENCRAB_CHUNK_BM25_LIMIT` | `10000` | Maximum chunks in the keyword index (see below) |
+| `OPENCRAB_CHUNK_TABLE_ROWS` | off | `1` stores large tables one row per chunk (see below) |
 
 All are read from the process environment, not from `.env`. Set
 `OPENCRAB_CHUNKING` for the ingest process and for the process that answers
@@ -45,6 +46,48 @@ queries (`opencrab serve`).
 
 Kordoc output for HWP/PDF is Markdown, so the same rules apply to parsed files.
 Plain text without headings is split by paragraph.
+
+### Row Records for Large Tables
+
+Change logs and comparison tables often have rows of several hundred
+characters. Packed by rows (rule 2), one chunk mixes rows from different dates,
+and a row longer than the limit is cut so that its continuation has no date
+cell, leaving no way to tell which row it belongs to.
+
+With `OPENCRAB_CHUNK_TABLE_ROWS=1`, a pipe table that is itself longer than the
+limit is stored one data row per chunk instead, as `column: value` lines:
+
+```text
+적용일: 2026-09-29
+변경: …
+이유: …
+```
+
+- Tables that fit within the limit keep their Markdown form and are packed as
+  before. Text before and after a row-record table is never packed into a row
+  record.
+- Empty cells are skipped together with their column name. A table whose data
+  cells are all empty is split as a Markdown table instead. A column with an
+  empty header, or a cell beyond the header's columns, is named `열 <n>`
+  (1-based).
+- `\|` stays inside its cell. An unescaped `|` always separates cells, also
+  inside backticks, as in GFM.
+- A record longer than the limit is split between cells. Every piece starts
+  with the line of the row's first non-empty cell (for example
+  `적용일: 2026-09-29`) unless that line is longer than a quarter of the limit.
+  A cell that is still too long is hard-split, and each of its pieces repeats
+  the column name (`<name>: `), unless that prefix takes half or more of the
+  space left for the piece; then name and value are cut together.
+  Non-whitespace characters of cell values are never dropped.
+- Row records are written to the same chunk records as other chunks; only the
+  body format differs. Chunk ids stay positional (`{source_id}#{n}`), so after
+  switching the flag a re-ingest rewrites the bodies, and ids beyond the new
+  chunk count are removed as stale.
+- Every non-empty data row becomes at least one chunk, so a table with
+  thousands of rows can exceed the per-document chunk limit (5,461, see below)
+  and fail to ingest where the packed form fit. The previous chunks are then kept.
+- The flag is read only when chunks are written (`ingest`); the process that
+  answers queries does not need it.
 
 ## Stored Records
 
