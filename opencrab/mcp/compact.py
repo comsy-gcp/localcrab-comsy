@@ -26,6 +26,7 @@ import os
 import re
 from typing import Any
 
+from opencrab.mcp.snippets import shorten_query_result
 from opencrab.ontology.chunking import chunk_header
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -50,6 +51,8 @@ def compact_enabled() -> bool:
 
 def encode_tool_result(name: str, result: Any) -> str:
     """Serialize a tool result into the text handed to the MCP client."""
+    if name == "ontology_query":
+        result = shorten_query_result(result)  # unchanged unless OPENCRAB_SNIPPET_CHARS is set
     if not compact_enabled():
         return json.dumps(result, ensure_ascii=True, default=str)
     if name == "ontology_query" and isinstance(result, dict):

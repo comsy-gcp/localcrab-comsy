@@ -23,6 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from opencrab.mcp.snippets import MAX_CHUNK_ID_CHARS, MAX_CHUNK_IDS, snippets_enabled
 from opencrab.ontology.evidence import evidence_signal
 
 logger = logging.getLogger(__name__)
@@ -280,6 +281,39 @@ def ontology_query(
     except Exception as exc:
         logger.error("ontology_query failed: %s", exc)
         return {"error": str(exc)}
+
+
+def ontology_chunk_text(
+    node_ids: list[str],
+    subject_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Return the full stored text of chunk results by node_id.
+
+    Listed only with ``OPENCRAB_SNIPPET_CHARS`` set, where ``ontology_query``
+    shortens later results. Only chunk records are returned. Pass the same
+    subject_id as the query: the same ReBAC view filter applies (without one,
+    like ontology_query, nothing is filtered). Ids that are not chunk records,
+    missing or not viewable are reported together under ``missing``.
+    """
+    if (
+        not isinstance(node_ids, list)
+        or not node_ids
+        or len(node_ids) > MAX_CHUNK_IDS
+        or not all(isinstance(i, str) and 0 < len(i) <= MAX_CHUNK_ID_CHARS for i in node_ids)
+    ):
+        return {
+            "error": f"node_ids must be a list of 1 to {MAX_CHUNK_IDS} non-empty strings "
+            f"of at most {MAX_CHUNK_ID_CHARS} characters"
+        }
+    ids = list(dict.fromkeys(_clean_str(i) for i in node_ids))
+    try:
+        chunks = _get_context()["hybrid"].texts_by_id(ids, subject_id=subject_id)
+    except Exception as exc:
+        logger.error("ontology_chunk_text failed: %s", exc)
+        return {"error": "chunk lookup failed"}
+    returned = {c["node_id"] for c in chunks}
+    return {"chunks": chunks, "missing": [i for i in ids if i not in returned]}
 
 
 def query_bm25(
@@ -1160,6 +1194,29 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "required": ["question"],
         },
     },
+    "ontology_chunk_text": {
+        "description": (
+            "Full stored text of ontology_query chunk results by node_id (up to 10). Use it "
+            "for results marked 'truncated' before quoting them. Pass the query's subject_id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "node_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": MAX_CHUNK_IDS,
+                    "description": "node_id values from ontology_query results.",
+                },
+                "subject_id": {
+                    "type": "string",
+                    "description": "Optional subject ID for policy-aware filtering (ReBAC view check).",
+                },
+            },
+            "required": ["node_ids"],
+        },
+    },
     "query_bm25": {
         "description": "BM25-only keyword search against ontology node properties. Fast and deterministic.",
         "inputSchema": {
@@ -1554,6 +1611,7 @@ _TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "ontology_add_node": ontology_add_node,
     "ontology_add_edge": ontology_add_edge,
     "ontology_query": ontology_query,
+    "ontology_chunk_text": ontology_chunk_text,
     "query_bm25": query_bm25,
     "ontology_impact": ontology_impact,
     "ontology_rebac_check": ontology_rebac_check,
@@ -1584,11 +1642,23 @@ _TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "schema_pack_uninstall": schema_pack_uninstall,
 }
 
-# Combined tool descriptor list (name + schema)
-TOOLS: list[dict[str, Any]] = [
-    {"name": name, **schema}
-    for name, schema in TOOL_SCHEMAS.items()
-]
+# Tools that exist only while the feature that needs them is on.
+_OPTIONAL_TOOLS: dict[str, Callable[[], bool]] = {"ontology_chunk_text": snippets_enabled}
+
+
+def _tool_enabled(name: str) -> bool:
+    check = _OPTIONAL_TOOLS.get(name)
+    return check is None or check()
+
+
+def available_tools() -> list[dict[str, Any]]:
+    """Tool descriptors (name + schema) for the current process environment."""
+    return [{"name": name, **schema} for name, schema in TOOL_SCHEMAS.items() if _tool_enabled(name)]
+
+
+# Tool descriptors at import. The MCP server lists available_tools() per request,
+# so the list and dispatch_tool always follow the same environment.
+TOOLS: list[dict[str, Any]] = available_tools()
 
 
 def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
@@ -1612,6 +1682,7 @@ def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
         If the tool name is not registered.
     """
     fn = _TOOL_FUNCTIONS.get(name)
-    if fn is None:
-        raise KeyError(f"Unknown tool: '{name}'. Available: {list(_TOOL_FUNCTIONS)}")
+    if fn is None or not _tool_enabled(name):
+        available = [n for n in _TOOL_FUNCTIONS if _tool_enabled(n)]
+        raise KeyError(f"Unknown tool: '{name}'. Available: {available}")
     return fn(**arguments)

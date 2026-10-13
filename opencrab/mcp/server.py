@@ -23,7 +23,7 @@ from typing import Any
 
 from opencrab.config import get_settings
 from opencrab.mcp.compact import encode_tool_result
-from opencrab.mcp.tools import TOOLS, dispatch_tool
+from opencrab.mcp.tools import available_tools, dispatch_tool
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ class MCPServer:
 
     def _handle_tools_list(self, params: dict[str, Any]) -> dict[str, Any]:
         """Return the list of all available MCP tools."""
-        return {"tools": TOOLS}
+        return {"tools": available_tools()}
 
     def _handle_tools_call(self, params: dict[str, Any]) -> dict[str, Any]:
         """
