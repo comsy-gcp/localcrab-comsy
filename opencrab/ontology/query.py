@@ -362,6 +362,25 @@ class HybridQuery:
             ))
         return results
 
+    def texts_by_id(self, ids: list[str], subject_id: str | None = None) -> list[dict[str, Any]]:
+        """Stored texts of chunk records in the given order; other ids are left out.
+
+        Only chunk records are returned: their stored id, ``metadata["node_id"]``
+        and ``{source_id}#{chunk_index}`` agree, so the ReBAC view check below
+        uses the same resource id as :meth:`query` does for the same record.
+        Ids that are not chunk records, not found or not viewable are left out.
+        """
+        found: list[dict[str, Any]] = []
+        for node_id in ids:
+            record = self._chroma.get_by_id(node_id)
+            meta = (record or {}).get("metadata") or {}
+            chunk_id = f"{meta.get('source_id')}#{meta.get('chunk_index')}"
+            if record is not None and "chunk_index" in meta and node_id == meta.get("node_id") == chunk_id:
+                found.append({"node_id": node_id, "text": record.get("document")})
+        if subject_id and self._rebac is not None:
+            found = self._policy_filter(found, subject_id)
+        return found
+
     def _bm25_search(
         self,
         question: str,

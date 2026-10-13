@@ -37,3 +37,5 @@ The variable is read from the process environment, not from `.env`.
 Graph-node results and every other tool keep their full fields; only the
 encoding (point 1) applies to them. Unset, results are encoded exactly as
 before.
+
+To also shorten later chunk bodies, see [result-snippets.md](result-snippets.md).
