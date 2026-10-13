@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from opencrab.ontology import chunking, supersede
+from opencrab.ontology import chunking, provenance, supersede
 from opencrab.ontology.chunk_bm25 import ChunkBM25
 from opencrab.stores.chroma_store import ChromaStore
 from opencrab.stores.neo4j_store import Neo4jStore
@@ -590,9 +590,12 @@ class HybridQuery:
 
         ``metadata["supersedes"]`` (a source_id or a list of them) marks the
         documents this one replaces; see :mod:`opencrab.ontology.supersede`.
+        ``metadata["authored_by"]`` (``"human"`` or ``"ai"``) labels who wrote
+        it; see :mod:`opencrab.ontology.provenance`.
         """
         try:
             metadata = supersede.stored_metadata(metadata, source_id)
+            metadata = provenance.stored_metadata(metadata)
         except ValueError as exc:
             return {"source_id": source_id, "stores": {}, "error": str(exc)}
         if chunking.chunking_enabled():

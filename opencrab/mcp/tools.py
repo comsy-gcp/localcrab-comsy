@@ -25,6 +25,8 @@ from typing import Any
 
 from opencrab.mcp.snippets import MAX_CHUNK_ID_CHARS, MAX_CHUNK_IDS, snippets_enabled
 from opencrab.ontology.evidence import evidence_signal
+from opencrab.ontology import provenance as _provenance
+from opencrab.ontology.provenance import provenance_block
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +279,9 @@ def ontology_query(
         evidence = evidence_signal(results) if limit >= 1 else None
         if evidence is not None:
             payload["evidence"] = evidence
+        provenance = provenance_block(results) if limit >= 1 else None
+        if provenance is not None:
+            payload["provenance"] = provenance
         return payload
     except Exception as exc:
         logger.error("ontology_query failed: %s", exc)
@@ -560,7 +565,8 @@ def ontology_ingest(
         Stable unique identifier for this source document.
     metadata:
         Optional metadata (e.g. space, node_id, author, created_at).
-        ``supersedes`` names the source_ids this document replaces.
+        ``supersedes`` names the source_ids this document replaces;
+        ``authored_by`` (``"human"`` or ``"ai"``) labels who wrote it.
     path:
         Optional local file to read instead of ``text``. PDF, HWP/HWPX, DOCX,
         XLSX and PPTX are parsed with Kordoc 4.x; ``source_id`` defaults to the path.
@@ -583,6 +589,11 @@ def ontology_ingest(
     source_id = _clean_str(source_id)
     if not text or not source_id:
         return {"source_id": source_id, "error": "text and source_id are required unless path is given"}
+    try:
+        # Normalized here so the document store and the response carry the stored label too.
+        meta = _provenance.stored_metadata(meta) or meta
+    except ValueError as exc:
+        return {"source_id": source_id, "error": str(exc)}
     result: dict[str, Any] = {"source_id": source_id, "stores": {}}
 
     # Ingest into vector store
@@ -1319,7 +1330,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "object",
                     "description": (
                         "Optional metadata. 'supersedes' (a source_id or a list, empty to clear) marks the "
-                        "documents this one replaces."
+                        "documents this one replaces; 'authored_by' ('human' or 'ai') labels who "
+                        "wrote it."
                     ),
                 },
                 "path": {"type": "string", "description": "Local file to read instead of text. PDF, HWP/HWPX, DOCX, XLSX and PPTX are parsed with Kordoc 4.x."},
