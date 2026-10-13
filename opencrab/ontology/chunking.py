@@ -14,6 +14,10 @@ Rules:
      dropping non-whitespace characters.
   3. Each chunk is prefixed with the document title and its heading path so
      the chunk is self-describing in search results.
+  4. With ``OPENCRAB_CHUNK_TABLE_ROWS=1``, a pipe table too large for one
+     chunk becomes one record per row, written as ``column: value`` lines.
+     A row longer than the limit is split between cells, and each piece
+     repeats the row's first cell (usually its date or id).
 
 Enabled at ingest time with ``OPENCRAB_CHUNKING=1``; the body size limit is
 ``OPENCRAB_CHUNK_MAX_CHARS`` (default 1200).
@@ -36,6 +40,7 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 _HEADING_START_RE = re.compile(r" {0,3}(#{1,6})(?:[ \t]|$)")
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_CELL_SEPARATOR_RE = re.compile(r"(?<!\\)\|")  # a pipe not escaped as ``\|``
 _TABLE_SEPARATOR_RE = re.compile(r"^\|?[ \t]*:?-{2,}:?[ \t]*(\|[ \t]*:?-{2,}:?[ \t]*)*\|?$")
 
 
@@ -51,6 +56,10 @@ class Chunk:
 
 def chunking_enabled() -> bool:
     return os.getenv("OPENCRAB_CHUNKING", "").strip().lower() in _TRUTHY
+
+
+def table_rows_enabled() -> bool:
+    return os.getenv("OPENCRAB_CHUNK_TABLE_ROWS", "").strip().lower() in _TRUTHY
 
 
 def chunk_max_chars() -> int:
@@ -81,14 +90,22 @@ def document_title(source_id: str, metadata: dict[str, Any] | None = None) -> st
     return source_id
 
 
-def chunk_markdown(text: str, title: str, max_chars: int = DEFAULT_MAX_CHARS) -> list[Chunk]:
-    """Split Markdown text into heading-scoped chunks of at most ``max_chars`` body characters."""
+def chunk_markdown(
+    text: str,
+    title: str,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    table_rows: bool = False,
+) -> list[Chunk]:
+    """Split Markdown text into heading-scoped chunks of at most ``max_chars`` body characters.
+
+    ``table_rows`` turns tables too large for one chunk into one record per row.
+    """
     if max_chars <= 0:
         raise ValueError("max_chars must be positive")
 
     pieces: list[tuple[tuple[str, ...], str]] = []
     for path, body in _sections(text):
-        for part in _split_body(body, max_chars):
+        for part in _split_body(body, max_chars, table_rows):
             pieces.append((path, part))
 
     return [
@@ -195,13 +212,21 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
 # ---------------------------------------------------------------------------
 
 
-def _split_body(body: str, max_chars: int) -> list[str]:
+def _split_body(body: str, max_chars: int, table_rows: bool) -> list[str]:
     if len(body) <= max_chars:
         return [body]
-    parts: list[str] = []
+    pieces: list[str] = []
+    parts: list[str] = []  # packed together until a row-record table interrupts them
     for block in _blocks(body):
-        parts.extend(_split_block(block, max_chars))
-    return _pack(parts, max_chars, "\n\n")
+        lines = block.splitlines()
+        if table_rows and len(block) > max_chars and _is_table(lines):
+            pieces.extend(_pack(parts, max_chars, "\n\n"))
+            parts = []
+            pieces.extend(_table_row_records(lines, max_chars))
+        else:
+            parts.extend(_split_block(block, max_chars))
+    pieces.extend(_pack(parts, max_chars, "\n\n"))
+    return pieces
 
 
 def _blocks(body: str) -> list[str]:
@@ -251,6 +276,59 @@ def _split_table(lines: list[str], max_chars: int) -> list[str]:
         return _pack([p for line in lines for p in _hard_split(line, max_chars)], max_chars, "\n")
     row_pieces = [p for row in rows for p in _hard_split(row, row_budget)]
     return [f"{header}\n{group}" for group in _pack(row_pieces, row_budget, "\n")]
+
+
+def _table_row_records(lines: list[str], max_chars: int) -> list[str]:
+    """One ``column: value`` record per data row; never packed with neighbouring rows."""
+    names = _cells(lines[0])
+    records: list[str] = []
+    for row in lines[2:]:
+        cells = [
+            (names[i] if i < len(names) and names[i] else f"열 {i + 1}", value)
+            for i, value in enumerate(_cells(row))
+            if value
+        ]
+        if cells:
+            records.extend(_row_record(cells, max_chars))
+    # Only empty data cells: keep the header row instead of losing the table.
+    return records or _split_table(lines, max_chars)
+
+
+def _cells(row: str) -> list[str]:
+    """Cells of a pipe-table row; ``\\|`` stays inside its cell (GFM escapes pipes even in code)."""
+    inner = row.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|") and not inner.endswith("\\|"):
+        inner = inner[:-1]
+    return [cell.strip() for cell in _CELL_SEPARATOR_RE.split(inner)]
+
+
+def _row_record(cells: list[tuple[str, str]], max_chars: int) -> list[str]:
+    lines = [f"{name}: {value}" for name, value in cells]
+    record = "\n".join(lines)
+    if len(record) <= max_chars:
+        return [record]
+    # Repeat the first non-empty cell (date, id) on every piece, unless it would crowd out the rest.
+    key = lines[0]
+    repeat = len(key) <= max_chars // 4
+    budget = max_chars - len(key) - 1 if repeat else max_chars
+    units: list[str] = []
+    for i, (name, value) in enumerate(cells):
+        if repeat and i == 0:
+            continue
+        line = lines[i]
+        label = f"{name}: "
+        if len(line) <= budget:
+            units.append(line)
+        elif len(label) < budget // 2:
+            parts = _hard_split(value, budget - len(label))
+            units.extend(label + part.lstrip() for part in parts if part.strip())
+        else:  # a column name this long is cut with its value instead of repeated
+            units.extend(_hard_split(line, budget))
+    if not repeat:
+        return _pack(units, max_chars, "\n")
+    return [f"{key}\n{group}" for group in _pack(units, budget, "\n")] or [key]
 
 
 def _hard_split(line: str, max_chars: int) -> list[str]:
