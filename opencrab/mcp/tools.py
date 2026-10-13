@@ -560,6 +560,7 @@ def ontology_ingest(
         Stable unique identifier for this source document.
     metadata:
         Optional metadata (e.g. space, node_id, author, created_at).
+        ``supersedes`` names the source_ids this document replaces.
     path:
         Optional local file to read instead of ``text``. PDF, HWP/HWPX, DOCX,
         XLSX and PPTX are parsed with Kordoc 4.x; ``source_id`` defaults to the path.
@@ -587,6 +588,9 @@ def ontology_ingest(
     # Ingest into vector store
     try:
         vector_result = ctx["hybrid"].ingest(text=text, source_id=source_id, metadata=meta)
+        if vector_result.get("error"):
+            # Rejected before anything was written (e.g. invalid supersedes): store nothing.
+            return {"source_id": source_id, "error": vector_result["error"]}
         result["stores"].update(vector_result.get("stores", {}))
         if "vector_id" in vector_result:
             result["vector_id"] = vector_result["vector_id"]
@@ -1311,7 +1315,13 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "properties": {
                 "text": {"type": "string", "description": "Text content to ingest."},
                 "source_id": {"type": "string", "description": "Stable source identifier (defaults to the file path when path is given)."},
-                "metadata": {"type": "object", "description": "Optional metadata."},
+                "metadata": {
+                    "type": "object",
+                    "description": (
+                        "Optional metadata. 'supersedes' (a source_id or a list, empty to clear) marks the "
+                        "documents this one replaces."
+                    ),
+                },
                 "path": {"type": "string", "description": "Local file to read instead of text. PDF, HWP/HWPX, DOCX, XLSX and PPTX are parsed with Kordoc 4.x."},
             },
             "required": [],

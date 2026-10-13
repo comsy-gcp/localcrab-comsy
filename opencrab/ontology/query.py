@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from opencrab.ontology import chunking
+from opencrab.ontology import chunking, supersede
 from opencrab.ontology.chunk_bm25 import ChunkBM25
 from opencrab.stores.chroma_store import ChromaStore
 from opencrab.stores.neo4j_store import Neo4jStore
@@ -348,6 +348,9 @@ class HybridQuery:
             top_k = max(cross_encoder.rerank_top_k(), limit)
             merged = cross_encoder.rerank_results(question, merged, top_k, self._cross_encoder)
 
+        # --- Stage 7: Superseded documents (opt-in) ---
+        merged = self._apply_supersession(merged, subject_id)
+
         # Convert back to QueryResult
         results = []
         for item in merged[:limit]:
@@ -361,6 +364,31 @@ class HybridQuery:
                 cross_score=item.get("cross_encoder_score"),
             ))
         return results
+
+    def _apply_supersession(
+        self, items: list[dict[str, Any]], subject_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Mark and down-weight results of superseded documents (``OPENCRAB_SUPERSEDED_WEIGHT``).
+
+        With ``subject_id``, only newer documents the subject may view count, so
+        a result never names (or loses rank to) a document the subject cannot see.
+        """
+        weight = supersede.superseded_weight()
+        if weight is None or not items:
+            return items
+        try:
+            metadatas = self._chroma.metadatas_where({supersede.HAS_SUPERSEDES: True})
+            if subject_id and self._rebac is not None:
+                # The same resource id the query uses: metadata node_id, else the source id.
+                records = [{"node_id": m.get("node_id") or m.get("source_id"), "meta": m} for m in metadatas]
+                metadatas = [r["meta"] for r in self._policy_filter(records, subject_id)]
+            return supersede.apply_supersession(
+                items, supersede.superseded_by_map(metadatas), weight
+            )
+        except Exception as exc:
+            # Type only: a store error message may include paths or document text.
+            logger.warning("Supersession failed; results unchanged: %s", type(exc).__name__)
+            return items
 
     def texts_by_id(self, ids: list[str], subject_id: str | None = None) -> list[dict[str, Any]]:
         """Stored texts of chunk records in the given order; other ids are left out.
@@ -559,7 +587,14 @@ class HybridQuery:
         With ``OPENCRAB_CHUNKING=1`` the text is split into heading-scoped
         chunks (see :mod:`opencrab.ontology.chunking`) stored as
         ``{source_id}#{n}``; stale chunks from a previous ingest are removed.
+
+        ``metadata["supersedes"]`` (a source_id or a list of them) marks the
+        documents this one replaces; see :mod:`opencrab.ontology.supersede`.
         """
+        try:
+            metadata = supersede.stored_metadata(metadata, source_id)
+        except ValueError as exc:
+            return {"source_id": source_id, "stores": {}, "error": str(exc)}
         if chunking.chunking_enabled():
             return self._ingest_chunked(text, source_id, metadata or {})
 

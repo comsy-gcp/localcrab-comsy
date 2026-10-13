@@ -242,6 +242,12 @@ class ChromaStore:
             for rid, doc, meta in zip(result["ids"], result["documents"], result["metadatas"])
         ]
 
+    def metadatas_where(self, where: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return the metadata of every document matching ``where`` (no texts)."""
+        if not self._available:
+            raise RuntimeError("ChromaDB is not available.")
+        return [meta or {} for meta in self._collection.get(where=where, include=["metadatas"])["metadatas"]]
+
     def existing_ids(self, ids: list[str]) -> list[str]:
         """Return the subset of ``ids`` already stored in the collection."""
         if not self._available:
