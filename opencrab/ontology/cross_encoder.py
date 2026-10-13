@@ -228,7 +228,12 @@ def rerank_results(
         logger.warning("Cross-encoder returned unusable scores; keeping fused order")
         return list(items)
     rescored = [
-        {**item, "fused_score": item.get("rerank_score", item.get("score")), "rerank_score": score}
+        {
+            **item,
+            "fused_score": item.get("rerank_score", item.get("score")),
+            "rerank_score": score,
+            "cross_encoder_score": score,  # "rerank_score" alone may be a fused score
+        }
         for item, score in zip(head, scores)
     ]
     rescored.sort(key=lambda item: item["rerank_score"], reverse=True)

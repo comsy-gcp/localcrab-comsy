@@ -81,3 +81,6 @@ If scoring raises, the fused order is returned and a warning naming only the
 exception type is logged (exception text may quote passages). A wrong number
 of scores or a non-finite score also falls back to the fused order, with a
 generic warning.
+
+The cross-encoder scores also drive the optional no-evidence signal; see
+[evidence-signal.md](evidence-signal.md).

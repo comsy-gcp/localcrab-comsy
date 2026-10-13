@@ -23,6 +23,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from opencrab.ontology.evidence import evidence_signal
+
 logger = logging.getLogger(__name__)
 
 
@@ -261,7 +263,7 @@ def ontology_query(
             use_rerank=use_rerank,
         )
         ctx["billing"].on_query(tenant_id, subject_id, question)
-        return {
+        payload: dict[str, Any] = {
             "question": question,
             "spaces_filter": spaces,
             "subject_id": subject_id,
@@ -270,6 +272,11 @@ def ontology_query(
             "total": len(results),
             "results": [r.to_dict() for r in results],
         }
+        # A limit below 1 slices results oddly (merged[:limit]); give no verdict on those.
+        evidence = evidence_signal(results) if limit >= 1 else None
+        if evidence is not None:
+            payload["evidence"] = evidence
+        return payload
     except Exception as exc:
         logger.error("ontology_query failed: %s", exc)
         return {"error": str(exc)}

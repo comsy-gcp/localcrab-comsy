@@ -107,6 +107,8 @@ class QueryResult:
     text: str | None
     metadata: dict[str, Any] = field(default_factory=dict)
     graph_context: dict[str, Any] | None = None
+    # Cross-encoder relevance in (0, 1) when stage 6 scored this result; not serialised.
+    cross_score: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -356,6 +358,7 @@ class HybridQuery:
                 text=item.get("text"),
                 metadata=item.get("metadata") or {},
                 graph_context=item.get("graph_context"),
+                cross_score=item.get("cross_encoder_score"),
             ))
         return results
 
